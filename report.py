@@ -13,37 +13,37 @@ class Function:
             self.bs()
 
         def bs(self):
-            if os.path.exists("data/同业资产余额报表.xls"):
-                tmp = pd.read_excel("data/同业资产余额报表.xls")
-                tmp = tmp[tmp['资产分类'].str.contains('受益权|收益权')]
+            if os.path.exists("data/福建农信金融市场业务余额表（汇总）.xls"):
+                tmp = pd.read_excel("data/福建农信金融市场业务余额表（汇总）.xls")
+                res = pd.to_datetime(tmp.loc[0, 'Unnamed: 10'], format='%Y-%m-%d')
+                tmp = pd.read_excel("data/福建农信金融市场业务余额表（汇总）.xls", header=2)
+                tmp = tmp[tmp['交易余额'] > 0]
+                tmp.loc[tmp['投资类别（资产/负债）'] == '负债', '交易余额'] = -tmp.loc[tmp['投资类别（资产/负债）'] == '负债', '交易余额']
+                tmp = tmp[['业务类型', '产品名称', '交易余额', '到期日', '投资开始日/起息日']]
+                tmp.columns = ['产品分类', '名称', '市值', '到期日', '起息日']
                 tmp['投组单元名称'] = '线下'
-                tmp['市值'] = tmp['市值(万元)'] / 10000
-                tmp = tmp[['日期', '投组单元名称', '资产分类', '底层资产名称', '市值', '到期日', '起息日']]
-                tmp.columns = ['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日']
-                tmp['业务日期'] = pd.to_datetime(tmp['业务日期'], format='%Y-%m-%d')
-                db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='cost',
-                                     charset='utf8')
-                pac = pd.read_sql("select * from cost_otc", db)
-                pac.columns = ['name', '成本']
-                tmp = pd.merge(tmp, pac, how='left', left_on='名称', right_on='name')
-                tmp['产品分类'] = tmp['成本'].map(lambda x: '债券' if x > 0 else 'SPV')
-                tmp = tmp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', '成本']]
+                tmp['市值'] = tmp['市值'] / 100000000
+                tmp['业务日期'] = res
                 self.data = self.data.append(tmp)
                 self.data = self.data.reset_index(drop=True)
+
             if os.path.exists("data/指定成本与FIFO损益分析-新.xls"):
                 tmp = pd.read_excel("data/指定成本与FIFO损益分析-新.xls")
                 tmp = tmp[~tmp['Unnamed: 4'].isna()]
                 tmp = tmp[(tmp['交易投组'] != '2同业-同业投资(jy2@xmrcb)') & (tmp['交易投组'] != '自营-债基-底层资产(林文妹)')]
                 tmp = tmp[~tmp['交易投组'].str.contains('资金往来')]
-                tmp = tmp[['交易投组', 'Unnamed: 4', '市值', '到期日', '起息日', '原始购入成本价', '市场净价']]
-                tmp.columns = ['投组单元名称', '名称', '市值', '到期日', '起息日', '成本', '估值']
+                tmp.loc[~tmp['债券名称'].isna(), '产品分类'] = '债券'
+                tmp.loc[tmp['交易投组'].str.contains('回购'), '产品分类'] = '回购'
+                tmp.loc[tmp['交易投组'].str.contains('拆借'), '产品分类'] = '拆借'
+                tmp.loc[tmp['交易投组'].str.contains('同业借款'), '产品分类'] = '同业借款'
+                tmp.loc[tmp['交易投组'].str.contains('债券借贷'), '产品分类'] = '债券借贷'
+                tmp.loc[tmp['产品分类'].isna(), '产品分类'] = '其他'
+                tmp = tmp[['交易投组', '产品分类', 'Unnamed: 4', '市值', '到期日', '起息日', '原始购入成本价', '市场净价']]
+                tmp.columns = ['投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', '成本', '估值']
                 tmp['市值'] = tmp['市值'] / 100000000
-                tmp['产品分类'] = tmp['投组单元名称'].map(lambda x: {'自营-资金-质押式回购(林文妹)': '质押式回购',
-                                                           '自营-资金-拆借(林文妹)': '同业拆借',
-                                                           '流动性-资金-同业借款-小微转贷款(资金业务部)': '同业借款',
-                                                           '自营-债券借贷(林文妹)': '债券借贷'}.get(x, '债券'))
                 tmp.loc[tmp['产品分类'] == '债券', '名称'] = tmp.loc[tmp['产品分类'] == '债券', '名称'].map(
                     lambda lambda_x: lambda_x[:lambda_x.rfind("(")])
+                tmp['业务日期'] = self.data.loc[0, '业务日期']
                 if not w.isconnected():
                     w.start()
                 exchange = w.wss("USDCNY.EX", "close", "tradeDate=" +
@@ -76,6 +76,7 @@ class Function:
                 tmp = pd.read_excel("data/估值余额查询.xls")
                 tmp = tmp[tmp['名称'] != '鑫安利得7号']
                 tmp = tmp[(tmp['投组单元名称'] == '丰裕') | (tmp['投组单元名称'] == '鑫安利得7号') | (tmp['投组单元名称'] == '丰盈专属')]
+                tmp.loc[tmp['产品分类2'] == '直接融资工具', '产品分类'] = '理财直融工具'
                 tmp = tmp[['业务日期', '投组单元名称', '产品分类', '名称', '市值(元)', '到期日', '建仓时间']]
                 tmp['投组单元名称'].replace('鑫安利得7号', '丰裕', inplace=True)
                 tmp['市值'] = tmp['市值(元)'] / 100000000
@@ -85,6 +86,35 @@ class Function:
                 self.data = self.data.reset_index(drop=True)
             db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
             instrument = pd.read_sql("select name from instrument_am", db)['name'].tolist()
+
+            for x in os.listdir('data/'):
+                if x.split('.')[0].endswith('估值报表'):
+                    name = x.split("_")[0].split("-")[1]
+                    fix_date = pd.to_datetime(x.split("_")[1], format='%Y%m%d')
+                    tmp = pd.read_excel('data/' + x, header=4)
+                    tmp = tmp[tmp.index > 1]
+                    code = list(set([str(x) for x in tmp['科目代码'].tolist() if len(str(x).split('.')) == 1]))
+                    code = [x for x in code if x[0] in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']]
+                    detail_code = tmp.loc[(tmp['科目名称'] == '债券投资') | (tmp['科目名称'] == '交易类资产支持证券'), '科目代码'].tolist()
+                    detail = []
+                    for y in detail_code:
+                        detail += tmp.loc[tmp['科目代码'].map(
+                            lambda z: str(z).startswith(y) and len(str(z).split('.')) == 4), '科目名称'].tolist()
+                    detail = list(set(detail))
+                    temp = tmp[tmp['科目名称'].map(lambda z: '(总价)' in str(z) and str(z).replace('(总价)', '') in detail)]
+                    temp['科目名称'] = temp['科目名称'].map(lambda z: z.replace('(总价)', ''))
+                    temp['产品分类'] = '债券'
+                    tmp = tmp[tmp['科目代码'].map(lambda a: a in code)]
+                    tmp = tmp[tmp['科目代码'].map(lambda z: z not in detail_code)]
+                    tmp['产品分类'] = tmp['科目名称']
+                    temp = temp.append(tmp)
+                    temp['业务日期'] = fix_date
+                    temp['投组单元名称'] = name
+                    temp['名称'] = temp['科目名称']
+                    temp = temp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '成本']]
+                    self.data = self.data.append(temp)
+            self.data = self.data.reset_index(drop=True)
+
             if os.path.exists("data/利率型.xls"):
                 tmp = pd.read_excel("data/利率型.xls")
                 tmp_index = tmp[~tmp['理财产品/内部投组名称'].isna()].index.tolist()
@@ -102,7 +132,7 @@ class Function:
                 tmp.columns = ['投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', '成本', '估值']
                 tmp['业务日期'] = self.data.loc[0, '业务日期']
                 for x in instrument:
-                    tmp.loc[tmp['名称'] == x, '产品分类'] = '理财直接融资工具'
+                    tmp.loc[tmp['名称'] == x, '产品分类'] = '理财直融工具'
                 self.data = self.data.append(tmp)
                 self.data = self.data.reset_index(drop=True)
             if os.path.exists("data/净值型.xls"):
@@ -139,7 +169,7 @@ class Function:
             pass
 
     def __init__(self, name):
-        self.name = {"同业业务中心": self.TY(), "理财事业部": self.LC()}.get(name)
+        self.name = {"同业业务中心": self.TY, "理财事业部": self.LC}.get(name)()
 
     def get_asset(self):
         return self.name.asset
@@ -172,6 +202,8 @@ class Bond:
         self.bond = data[self.bond.columns.tolist() + ['债券代码']].copy(deep=True)
 
     def asset_bond(self):
+        if self.flag:
+            return self.bond
         self.code()
         if not w.isconnected():
             w.start()
@@ -204,6 +236,11 @@ class Bond:
             self.bond.loc[self.bond['名称'] == name, '最新面值'] = special.loc[special['code'] == name, 'latestpar']
             self.bond.loc[self.bond['名称'] == name, '发行总额'] = special.loc[
                 special['code'] == name, 'issueamount']
+        if os.path.exists("data/指定成本与FIFO损益分析-新.xls"):
+            res = pd.read_excel("data/指定成本与FIFO损益分析-新.xls")
+            res = res[['Unnamed: 4', '市价修正久期']]
+            for name in special['code'].tolist():
+                self.bond.loc[self.bond['名称'] == name, '修正久期'] = res.loc[res['Unnamed: 4'] == name, '市价修正久期']
         self.flag = True
         return self.bond
 
@@ -236,20 +273,26 @@ class MMF:
         self.data = data
 
     def wind(self):
+        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+        code = pd.read_sql("select name,code from mmf_code where name in ('" + "','".join(self.data['名称'].tolist()) +
+                           "')", db)
         if not w.isconnected():
             w.start()
-        data = w.wss("".join(self.data['货基代码'].tolist()), "fund_corp_fundmanagementcompany,fund_fundscale", "unit=1",
+        data = w.wss(",".join(code['code'].tolist()), "fund_corp_fundmanagementcompany,fund_fundscale", "unit=1",
                      usedf=True)[1]
         data.columns = ['管理人', '基金规模']
-        self.data = pd.merge(self.data, data, left_on='货基代码', right_index=True)
+        self.data = pd.merge(self.data, code, left_on='名称', right_on='name')
+        self.data = pd.merge(self.data, data, left_on='code', right_index=True)
         self.data['占比'] = self.data['市值'] * 100000000 / self.data['基金规模']
 
     def ratio(self):
         self.wind()
-        out = [self.data['占比'].max(), self.data['占比'].min(), str(len(set(self.data['管理人'].tolist()))) + "家"]
+        out = [str(round(self.data['占比'].max() * 100, 2)),
+               str(round(self.data['占比'].min() * 100, 2)),
+               str(len(set(self.data['管理人'].tolist()))) + "家"]
         res = self.data.groupby('管理人')['市值'].sum()
-        out.append(res.max())
-        out.append(res.min())
+        out.append(str(round(res.max(), 2)))
+        out.append(str(round(res.min(), 2)))
         return out
 
 
@@ -272,8 +315,8 @@ class Department:
     def __init__(self, name):
         self.name = name
         func = Function(name)
-        self.bs = BalanceSheet(func.get_asset(), func.get_loan())
         self.stream = Stream(func.get_stream())
+        self.bs = BalanceSheet(func.get_asset(), func.get_loan())
 
     def struct(self):
         data = {}
@@ -305,7 +348,7 @@ class Department:
         res = self.bs.bond.asset_credit()
         res = res[res['省份'] == '福建省']
         data = res.groupby('城市', as_index=False)['市值'].sum()
-        data['占比'] = data['市值'] / data['市值'].sum()
+        data['占比'] = str(round(data['市值'] / data['市值'].sum() * 100, 2)) + "%"
         return data
 
     def duration(self):
@@ -338,10 +381,10 @@ class Department:
         out = []
         res = self.bs.bond.asset_bond()
         res['评级'] = res['主体评级']
-        res.loc[res['评级'].isna(), '评级'] = res[res['评级'].isna(), '主体评级']
+        res.loc[res['评级'].isna(), '评级'] = res.loc[res['评级'].isna(), '主体评级']
         res['评级AA+以下'] = '是'
-        res[res['评级'] == 'AAA', '评级AA+以下'] = '否'
-        res[res['评级'] == 'AA+', '评级AA+以下'] = '否'
+        res.loc[res['评级'] == 'AAA', '评级AA+以下'] = '否'
+        res.loc[res['评级'] == 'AA+', '评级AA+以下'] = '否'
         total_bond = res['市值'].sum()
         out.append(str(round(total_bond / total * 100, 2)) + "%")
         total_credit = res.loc[res['债券类别'] == '非金融企业债券', '市值'].sum()
@@ -356,6 +399,10 @@ class Department:
 
     def fund(self):
         pass
+
+    def lost(self):
+        res = self.bs.bond.asset_bond()
+        res['成本'] = res['成本'] / res['最新面值'] * 100
 
     def etf(self):
         pass
@@ -457,33 +504,36 @@ class Word:
         data = ty.area()
         for x in range(len(data)):
             for y in range(3):
-                self.document.tables[15].cell(2 + x, y).text = data.loc[x, data.columns.tolist()[y]]
+                self.document.tables[15].cell(2 + x, y).text = str(data.loc[x, data.columns.tolist()[y]])
         data = lc.area()
         for x in range(len(data)):
             for y in range(3):
-                self.document.tables[18].cell(2 + x, y).text = data.loc[x, data.columns.tolist()[y]]
+                self.document.tables[18].cell(2 + x, y).text = str(data.loc[x, data.columns.tolist()[y]])
 
         data = ty.duration()
         for x in range(4):
             for y in range(2):
-                self.document.tables[19].cell(1 + x, 1 + y).text = data[x][y]
+                self.document.tables[19].cell(1 + x, 1 + y).text = str(data[x][y])
         data = lc.duration()
         for x in range(4):
             for y in range(2):
-                self.document.tables[19].cell(5 + x, 1 + y).text = data[x][y]
+                self.document.tables[19].cell(5 + x, 1 + y).text = str(data[x][y])
 
         # level table[20]
 
         data = ty.ratio()
         for x in range(8):
-            self.document.tables[21].cell(1 + x, 1).text = data[x]
+            self.document.tables[21].cell(1 + x, 1).text = str(data[x])
         data = lc.ratio()
         for x in range(8):
-            self.document.tables[21].cell(1 + x, 2).text = data[x]
+            self.document.tables[21].cell(1 + x, 2).text = str(data[x])
 
-        data = MMF(ty.bs.asset[ty.bs.asset['产品类别'] == '货币基金']).ratio()
-        for x in range(5):
-            self.document.tables[22].cell(2 + x, 1).text = data[x]
+        if len(ty.bs.asset[ty.bs.asset['产品分类'] == '货币基金']) > 0:
+            data = MMF(ty.bs.asset[ty.bs.asset['产品分类'] == '货币基金']).ratio()
+            for x in range(5):
+                self.document.tables[22].cell(2 + x, 1).text = str(data[x])
+        else:
+            self.document.tables[22].cell(2, 1).text = "无业务"
 
         self.document.tables[23].cell(1, 1).text = self.document.tables[19].cell(1, 2).text
         self.document.tables[23].cell(2, 1).text = self.document.tables[19].cell(5, 2).text
