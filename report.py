@@ -10,7 +10,9 @@ class Function:
     class TY:
         def __init__(self):
             self.data = pd.DataFrame(columns=['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', '成本', '估值'])
+            self.flow = pd.DataFrame(columns=['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方', '净价'])
             self.bs()
+            self.prepare_stream()
 
         def bs(self):
             if os.path.exists("data/福建农信金融市场业务余额表（汇总）.xls"):
@@ -63,13 +65,157 @@ class Function:
             tmp['市值'] = abs(tmp['市值'])
             return tmp
 
+        def prepare_stream(self):
+            if os.path.exists('data/交易查询与维护_现券.xls'):
+                tmp = pd.read_excel('data/交易查询与维护_现券.xls', header=1)
+                tmp['名称'] = tmp['债券名称'].map(lambda x: x[:x.rfind('(')])
+                tmp['类别'] = '债券'
+                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['方向'] = tmp['交易方向']
+                tmp['金额'] = tmp['结算金额(元)'] / 100000000
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方', '净价']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/交易查询与维护_质押式回购.xls'):
+                tmp = pd.read_excel('data/交易查询与维护_质押式回购.xls', header=1)
+                tmp['名称'] = tmp['回购名称']
+                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['方向'] = tmp['回购方向']
+                tmp['金额'] = tmp['交易金额(元)'] / 100000000
+                tmp['类别'] = '回购'
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/交易查询与维护_同业拆借.xls'):
+                tmp = pd.read_excel('data/交易查询与维护_同业拆借.xls', header=1)
+                tmp['名称'] = tmp['交易品种']
+                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['方向'] = tmp['拆借方向']
+                tmp['金额'] = tmp['拆借金额(万)'] / 10000
+                tmp['类别'] = '同业拆借'
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/交易查询与维护_债券借贷.xls'):
+                tmp = pd.read_excel('data/交易查询与维护_债券借贷.xls', header=1)
+                tmp['名称'] = '债券借贷'
+                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['方向'] = tmp['交易方向']
+                tmp['金额'] = tmp['标的券券面总额(万)'] / 10000
+                tmp['类别'] = '债券借贷'
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/交易查询与维护_同业借款.xls'):
+                tmp = pd.read_excel('data/交易查询与维护_同业借款.xls', header=1)
+                tmp['名称'] = '同业借款'
+                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['方向'] = tmp['交易方向']
+                tmp['金额'] = tmp['交易本金(万)'] / 10000
+                tmp['类别'] = '同业借款'
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/交易查询与维护_承销.xls'):
+                tmp = pd.read_excel('data/交易查询与维护_承销.xls')
+                tmp['名称'] = tmp['债券'].map(lambda x: x[:x.rfind('(')])
+                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['交易投组'] = tmp['投组']
+                tmp['方向'] = tmp['交易类型'].map(
+                    lambda x: {'承销买入': '买入', '一级市场投资': '买入', '分销入': '买入', '一级市场分销卖出': '卖出',
+                               '二级市场分销卖出': '卖出', '转自营': '卖出'}.get(x))
+                tmp['金额'] = tmp['缴款金额(元)'] / 100000000
+                tmp['交易投组'] = tmp['投组']
+                tmp['净价'] = tmp['净价(元)']
+                tmp['类别'] = '债券'
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方', '净价']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/存放同业交易明细.xls'):
+                tmp = pd.read_excel('data/存放同业交易明细.xls', header=2)
+                tmp['名称'] = '存放同业'
+                tmp['类别'] = '存放同业'
+                tmp['交易日'] = tmp['起息日期'].map(
+                    lambda x: pd.to_datetime(x.replace("年", '/').replace('月', '/').replace('日', ''),
+                                             format='%Y/%m/%d'))
+                tmp['方向'] = tmp['交易方向']
+                tmp.loc[tmp['存入金额（元）'].isna(), '金额'] = tmp.loc[tmp['存入金额（元）'].isna(), '结算金额(元)'] / 100000000
+                tmp.loc[tmp['金额'].isna(), '金额'] = tmp.loc[tmp['金额'].isna(), '存入金额（元）'] / 100000000
+                tmp['交易投组'] = '存放同业'
+                tmp['对手方'] = tmp['交易对手']
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/同业存放交易明细表.xls'):
+                tmp = pd.read_excel('data/同业存放交易明细表.xls', header=2)
+                tmp['名称'] = '同业存放'
+                tmp['类别'] = '同业存放'
+                tmp['方向'] = tmp['交易方向']
+                tmp.loc[tmp['存入金额（元）'].isna(), '金额'] = tmp.loc[tmp['存入金额（元）'].isna(), '结算金额(元)'] / 100000000
+                tmp.loc[tmp['金额'].isna(), '金额'] = tmp.loc[tmp['金额'].isna(), '存入金额（元）'] / 100000000
+                tmp['交易投组'] = '同业存放'
+                tmp['对手方'] = tmp['交易对手']
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/上存约期存款明细表.xls'):
+                tmp = pd.read_excel('data/上存约期存款明细表.xls', header=2)
+                tmp['名称'] = '上存约期存款'
+                tmp['类别'] = '上存约期存款'
+                tmp.loc[tmp['上存模式'].isna(), '方向'] = '支取'
+                tmp['方向'].fillna({'上存模式': '上存'}, inplace=True)
+                tmp.loc[tmp['方向'] == '上存', '金额'] = tmp.loc[tmp['方向'] == '上存', '上存金额(元)'] / 100000000
+                tmp.loc[tmp['方向'] == '支取', '金额'] = tmp.loc[tmp['方向'] == '支取', '支取金额（元）'] / 100000000
+                tmp['交易投组'] = '约期存款'
+                tmp['对手方'] = '省联社'
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/委托存放交易明细表.xls'):
+                tmp = pd.read_excel('data/委托存放交易明细表.xls', header=2)
+                tmp['名称'] = '代理存放'
+                tmp['类别'] = '代理存放'
+                tmp['方向'] = tmp['交易类型']
+                tmp.loc[tmp['方向'].str.contains('到期'), '金额'] = tmp.loc[
+                                                                  tmp['方向'].str.contains('到期'), '支取金额(元)'] / 100000000
+                tmp.loc[tmp['金额'].isna(), '金额'] = tmp.loc[tmp['金额'].isna(), '存放金额（元）'] / 100000000
+                tmp['交易投组'] = '代理存放'
+                tmp['对手方'] = tmp['存放行']
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
+            if os.path.exists('data/其他投资交易明细表.xls'):
+                tmp = pd.read_excel('data/其他投资交易明细表.xls', header=2)
+                tmp['名称'] = tmp['资产名称']
+                tmp['类别'] = '其他投资'
+                tmp['交易日'] = tmp['申请日期'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['方向'] = tmp['交易方向']
+                tmp['金额'] = tmp['金额'] / 100000000
+                tmp['交易投组'] = '其他投资'
+                tmp['对手方'] = tmp['交易对手']
+                tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
+                self.flow = self.flow.append(tmp)
+                self.flow = self.flow.reset_index(drop=True)
+
         def stream(self):
-            pass
+            return self.flow
 
     class LC:
         def __init__(self):
             self.data = pd.DataFrame(columns=['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', '成本', '估值'])
+            self.flow = pd.DataFrame(columns=['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方', '净价'])
             self.bs()
+            self.prepare_stream()
 
         def bs(self):
             if os.path.exists("data/估值余额查询.xls"):
@@ -92,7 +238,7 @@ class Function:
                     name = x.split("_")[0].split("-")[1]
                     fix_date = pd.to_datetime(x.split("_")[1], format='%Y%m%d')
                     tmp = pd.read_excel('data/' + x, header=4)
-                    tmp = tmp[tmp.index > 1]
+                    tmp = tmp[tmp.index > 1].copy(deep=True)
                     code = list(set([str(x) for x in tmp['科目代码'].tolist() if len(str(x).split('.')) == 1]))
                     code = [x for x in code if x[0] in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']]
                     detail_code = tmp.loc[(tmp['科目名称'] == '债券投资') | (tmp['科目名称'] == '交易类资产支持证券'), '科目代码'].tolist()
@@ -101,16 +247,26 @@ class Function:
                         detail += tmp.loc[tmp['科目代码'].map(
                             lambda z: str(z).startswith(y) and len(str(z).split('.')) == 4), '科目名称'].tolist()
                     detail = list(set(detail))
-                    temp = tmp[tmp['科目名称'].map(lambda z: '(总价)' in str(z) and str(z).replace('(总价)', '') in detail)]
+                    temp = tmp[
+                        tmp['科目名称'].map(lambda z: '(总价)' in str(z) and str(z).replace('(总价)', '') in detail)].copy(
+                        deep=True)
                     temp['科目名称'] = temp['科目名称'].map(lambda z: z.replace('(总价)', ''))
                     temp['产品分类'] = '债券'
-                    tmp = tmp[tmp['科目代码'].map(lambda a: a in code)]
+                    detail = set(detail).difference(set(temp['科目名称'].tolist()))
+                    temp_extend = tmp[tmp['科目名称'].map(lambda z: z in detail) & (
+                        tmp['科目代码'].map(lambda z: str(z)[:4] in detail_code))].copy(deep=True)
+                    temp_extend['产品分类'] = '债券'
+                    tmp = tmp[tmp['科目代码'].map(lambda z: z in code)]
                     tmp = tmp[tmp['科目代码'].map(lambda z: z not in detail_code)]
+                    tmp.loc[tmp['科目代码'].map(lambda z: z[0] == '2'), '市值'] = -tmp.loc[
+                        tmp['科目代码'].map(lambda z: z[0] == '2'), '市值']
                     tmp['产品分类'] = tmp['科目名称']
                     temp = temp.append(tmp)
+                    temp = temp.append(temp_extend)
                     temp['业务日期'] = fix_date
                     temp['投组单元名称'] = name
                     temp['名称'] = temp['科目名称']
+                    temp['成本'] = temp['单位成本']
                     temp = temp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '成本']]
                     self.data = self.data.append(temp)
             self.data = self.data.reset_index(drop=True)
@@ -165,8 +321,11 @@ class Function:
             tmp['市值'] = abs(tmp['市值'])
             return tmp
 
-        def stream(self):
+        def prepare_stream(self):
             pass
+
+        def stream(self):
+            return self.flow
 
     def __init__(self, name):
         self.name = {"同业业务中心": self.TY, "理财事业部": self.LC}.get(name)()
