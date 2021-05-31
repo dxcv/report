@@ -123,7 +123,7 @@ class Function:
             if os.path.exists('data/交易查询与维护_同业借款.xls'):
                 tmp = pd.read_excel('data/交易查询与维护_同业借款.xls', header=1)
                 tmp['名称'] = '同业借款'
-                tmp['交易日'] = tmp['交易日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['交易日'] = tmp['交易日期'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
                 tmp['方向'] = tmp['交易方向']
                 tmp['金额'] = tmp['交易本金(万)'] / 10000
                 tmp['类别'] = '同业借款'
@@ -210,7 +210,7 @@ class Function:
                 tmp['类别'] = '其他投资'
                 tmp['交易日'] = tmp['申请日期'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
                 tmp['方向'] = tmp['交易方向']
-                tmp['金额'] = tmp['金额'] / 100000000
+                tmp['金额'] = tmp['金额（元）'] / 100000000
                 tmp['交易投组'] = '其他投资'
                 tmp['对手方'] = tmp['交易对手']
                 tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
@@ -268,6 +268,7 @@ class Function:
                     temp['投组单元名称'] = name
                     temp['名称'] = temp['科目名称']
                     temp['成本'] = temp['单位成本']
+                    temp['市值'] = temp['市值'] / 100000000
                     temp = temp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '成本']]
                     self.data = self.data.append(temp)
             self.data = self.data.reset_index(drop=True)
@@ -361,7 +362,7 @@ class Function:
                 tmp['名称'] = tmp['Unnamed: 12']
                 tmp['类别'] = '回购'
                 tmp['交易日'] = tmp['Unnamed: 11']
-                tmp['方向'] = tmp['Unnamed: 3'].replace({'质押式逆回购':'逆回购','质押式正回购':'正回购'})
+                tmp['方向'] = tmp['Unnamed: 3'].replace({'质押式逆回购': '逆回购', '质押式正回购': '正回购'})
                 tmp['金额'] = tmp['结算金额(元)'] / 100000000
                 tmp['交易投组'] = tmp['Unnamed: 4']
                 tmp['对手方'] = tmp['对手名称']
@@ -549,19 +550,22 @@ class Department:
         res = self.bs.bond.asset_credit()
         res = res[res['省份'] == '福建省']
         data = res.groupby('城市', as_index=False)['市值'].sum()
-        data['占比'] = str(round(data['市值'] / data['市值'].sum() * 100, 2)) + "%"
+        data['占比'] = (data['市值'] / data['市值'].sum() * 100).map(lambda x: str(round(x, 2)) + '%')
+        data['市值'] = data['市值'].map(lambda x: str(round(x, 2)))
         return data
 
     def duration(self):
         res = self.bs.bond.asset_bond()
-        return [[res['市值'].sum(), (res['市值'] * res['修正久期']).sum() / res['市值'].sum()],
-                [res[res['债券类别'] == '利率债']['市值'].sum(),
-                 (res[res['债券类别'] == '利率债']['市值'] * res['修正久期']).sum() / res[res['债券类别'] == '利率债']['市值'].sum()],
-                [res[res['债券类别'] == '金融债']['市值'].sum(),
-                 (res[res['债券类别'] == '金融债']['市值'] * res['修正久期']).sum() / res[res['债券类别'] == '金融债']['市值'].sum()],
-                [res[res['债券类别'] == '非金融企业债券']['市值'].sum(),
-                 (res[res['债券类别'] == '非金融企业债券']['市值'] * res['修正久期']).sum() / res[res['债券类别'] == '非金融企业债券'][
-                     '市值'].sum()]]
+        return [[round(res['市值'].sum(), 2), round((res['市值'] * res['修正久期']).sum() / res['市值'].sum(), 2)],
+                [round(res[res['债券类别'] == '利率债']['市值'].sum(), 2),
+                 round((res[res['债券类别'] == '利率债']['市值'] * res['修正久期']).sum() /
+                       res[res['债券类别'] == '利率债']['市值'].sum(), 2)],
+                [round(res[res['债券类别'] == '金融债']['市值'].sum(), 2),
+                 round((res[res['债券类别'] == '金融债']['市值'] * res['修正久期']).sum() /
+                       res[res['债券类别'] == '金融债']['市值'].sum(), 2)],
+                [round(res[res['债券类别'] == '非金融企业债券']['市值'].sum(), 2),
+                 round((res[res['债券类别'] == '非金融企业债券']['市值'] * res['修正久期']).sum() /
+                       res[res['债券类别'] == '非金融企业债券']['市值'].sum(), 2)]]
 
     def lever(self):
         pass
@@ -690,14 +694,14 @@ class Word:
         data, big = ty.concentration()
         for x in range(4):
             for y in range(4):
-                self.document.tables[13].cell(2 + x, y).text = data[x][y]
+                self.document.tables[13].cell(2 + x, 1 + y).text = data[x][y]
         for x in range(10):
             for y in range(3):
                 self.document.tables[14].cell(2 + x, y).text = big[x][y]
         data, big = lc.concentration()
         for x in range(4):
             for y in range(4):
-                self.document.tables[16].cell(2 + x, y).text = data[x][y]
+                self.document.tables[16].cell(2 + x, 1 + y).text = data[x][y]
         for x in range(10):
             for y in range(3):
                 self.document.tables[17].cell(2 + x, y).text = big[x][y]
