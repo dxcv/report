@@ -226,13 +226,12 @@ class Function:
                 tmp.loc[tmp['产品分类2'] == '直接融资工具', '产品分类'] = '理财直融工具'
                 tmp = tmp[['业务日期', '投组单元名称', '产品分类', '名称', '市值(元)', '到期日', '建仓时间']]
                 tmp['投组单元名称'].replace('鑫安利得7号', '丰裕', inplace=True)
+                tmp['产品分类'].replace('资产证券化债券', '债券', inplace=True)
                 tmp['市值'] = tmp['市值(元)'] / 100000000
                 tmp = tmp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '建仓时间']]
                 tmp.columns = ['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日']
                 self.data = self.data.append(tmp)
                 self.data = self.data.reset_index(drop=True)
-            db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
-            instrument = pd.read_sql("select name from instrument_am", db)['name'].tolist()
 
             for x in os.listdir('data/'):
                 if x.split('.')[0].endswith('估值报表'):
@@ -269,10 +268,19 @@ class Function:
                     temp['名称'] = temp['科目名称']
                     temp['成本'] = temp['单位成本']
                     temp['市值'] = temp['市值'] / 100000000
+                    temp = temp.append(
+                        {'业务日期': fix_date,
+                         '投组单元名称': name,
+                         '产品分类': '理财产品',
+                         '名称': '理财产品',
+                         '市值': -temp['市值'].sum(),
+                         '成本': float('nan')}, ignore_index=True)
                     temp = temp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '成本']]
                     self.data = self.data.append(temp)
             self.data = self.data.reset_index(drop=True)
 
+            db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+            instrument = pd.read_sql("select name from instrument_am", db)['name'].tolist()
             if os.path.exists("data/利率型.xls"):
                 tmp = pd.read_excel("data/利率型.xls")
                 tmp_index = tmp[~tmp['理财产品/内部投组名称'].isna()].index.tolist()
@@ -383,6 +391,39 @@ class Function:
         return self.name.stream
 
 
+class BankInfo:
+    def __init__(self, date_date):
+        year = date_date.year
+        month = (date_date.month - 1) // 3 * 3
+        if month == 0:
+            year -= 1
+            month = 12
+        day = {3: 31, 6: 30, 9: 30, 12: 31}.get(month)
+        self.date = str(year) + "/" + str(month) + "/" + str(day)
+        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+        data = pd.read_sql("select name,val/10000 from blancesheet where date='" + self.date + "'", db)
+        self.asset = float(data.loc[data['name'] == '总资产', 'val/10000'].sum())
+        self.loan = float(data.loc[data['name'] == '总负债', 'val/10000'].sum())
+        self.net = self.asset - self.loan
+        self.capital = float(data.loc[data['name'] == '一级资本净额', 'val/10000'].sum())
+
+    def get_date(self):
+        return self.date
+
+    def get_asset(self):
+        return self.asset
+
+    def get_net(self):
+        return self.net
+
+    def get_capital(self):
+        return self.capital
+
+    def get_anonymous_special(self):
+        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+        return pd.read_sql('select val from anonymous where date=' + self.date + "'", db).loc[0, 'val']
+
+
 class Bond:
     def __init__(self, bond):
         self.bond = bond
@@ -410,11 +451,11 @@ class Bond:
         if not w.isconnected():
             w.start()
         data = w.wss(",".join(set(self.bond['债券代码'].tolist())),
-                     "windl1type,windl2type,province,city,comp_name,municipalbond,subordinateornot,mixcapital,perpetualornot,issue_issuemethod,modidura_cnbd,net_cnbd,latestpar,amount,latestissurercreditrating,issueamount",
+                     "windl1type,windl2type,province,city,comp_name,municipalbond,subordinateornot,mixcapital,perpetualornot,issue_issuemethod,modidura_cnbd,net_cnbd,latestpar,amount,latestissurercreditrating,issueamount,ptmyear",
                      "unit=1;tradeDate=" + str(self.bond.loc[0, '业务日期']).split()[0].replace("-", "") + ";credibility=1",
                      usedf=True)[1]
-        wind_columns = ['WIND一级分类', 'WIND二级分类', '省份', '城市', '发行主体', '是否城投债', '是否次级债', '是否混合资本债券', '是否永续债', '发行方式',
-                        '修正久期', '估值净价', '最新面值', '债项评级', '主体评级', '发行总额']
+        wind_columns = ['WIND一级分类', 'WIND二级分类', '省份', '城市', '发行主体', '是否城投债', '是否次级债', '是否混合资本债券',
+                        '是否永续债', '发行方式', '修正久期', '估值净价', '最新面值', '债项评级', '主体评级', '发行总额', '剩余期限']
         data.columns = wind_columns
         data = pd.merge(self.bond, data, how='left', left_on='债券代码', right_index=True)
         self.bond = data[self.bond.columns.tolist() + wind_columns]
@@ -498,6 +539,10 @@ class MMF:
         return out
 
 
+class ETF:
+    pass
+
+
 class BalanceSheet:
     def __init__(self, asset, loan):
         self.asset = asset()
@@ -567,22 +612,7 @@ class Department:
                  round((res[res['债券类别'] == '非金融企业债券']['市值'] * res['修正久期']).sum() /
                        res[res['债券类别'] == '非金融企业债券']['市值'].sum(), 2)]]
 
-    def lever(self):
-        pass
-
-    def ratio(self):
-        year = self.bs.asset.loc[0, '业务日期'].date().year
-        month = (self.bs.asset.loc[0, '业务日期'].date().month - 1) // 3 * 3
-        if month == 0:
-            year -= 1
-            month = 12
-        day = {3: 31, 6: 30, 9: 30, 12: 31}.get(month)
-
-        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
-        cur = db.cursor()
-        cur.execute("select val from blancesheet where date='" + str(year) + "/" + str(month) + "/" + str(
-            day) + "' and name='总资产'")
-        total = float(cur.fetchall()[0][0]) / 10000
+    def ratio(self, total):
         out = []
         res = self.bs.bond.asset_bond()
         res['评级'] = res['主体评级']
@@ -602,15 +632,20 @@ class Department:
         out.append(str(round(res.loc[res['是否混合资本债券'] == '是', '市值'].sum() / total_bond * 100, 2)) + "%")
         return out
 
-    def fund(self):
-        pass
-
     def lost(self):
         res = self.bs.bond.asset_bond()
         res['成本'] = res['成本'] / res['最新面值'] * 100
+        res['止损限额'] = (res['成本'] - res['估值净价']) / res['成本'] * 100
+        return [res.loc[(res['剩余期限'] <= 5) & (res['止损限额'] > 16), :],
+                res.loc[(res['剩余期限'] > 5) & (res['剩余期限'] <= 10) & (res['止损限额'] > 23), :],
+                res.loc[(res['剩余期限'] > 10) & (res['止损限额'] > 40), :]]
 
-    def etf(self):
-        pass
+    def credit_limit(self):
+        res = self.bs.bond.asset_credit()
+        res = res[res['WIND一级分类'] != '资产支持证券']
+        res = pd.merge(res.groupby('名称', as_index=False)['市值'].sum(), res[['名称', '发行总额']], how='left', on='名称')
+        res['单券集中度'] = res['市值'] / res['发行总额'] * 100000000
+        return [res['单券集中度'].max(), res[res['单券集中度'] > 0.2]]
 
 
 class Word:
@@ -644,6 +679,7 @@ class Word:
     def go(self):
         ty = Department("同业业务中心")
         lc = Department("理财事业部")
+        bank = BankInfo(ty.bs.asset.loc[0, '业务日期'].date())
 
         size = len(ty.struct().get('资产'))
         if len(ty.struct().get('负债')) > size:
@@ -695,54 +731,148 @@ class Word:
         for x in range(4):
             for y in range(4):
                 self.document.tables[13].cell(2 + x, 1 + y).text = data[x][y]
+                self.style_cell(self.document.tables[13].cell(2 + x, 1 + y), '宋体', 177800)
         for x in range(10):
             for y in range(3):
                 self.document.tables[14].cell(2 + x, y).text = big[x][y]
+                self.style_cell(self.document.tables[14].cell(2 + x, y), '宋体', 177800)
         data, big = lc.concentration()
         for x in range(4):
             for y in range(4):
                 self.document.tables[16].cell(2 + x, 1 + y).text = data[x][y]
+                self.style_cell(self.document.tables[16].cell(2 + x, 1 + y), '宋体', 177800)
         for x in range(10):
             for y in range(3):
                 self.document.tables[17].cell(2 + x, y).text = big[x][y]
+                self.style_cell(self.document.tables[17].cell(2 + x, y), '宋体', 177800)
 
         data = ty.area()
         for x in range(len(data)):
             for y in range(3):
                 self.document.tables[15].cell(2 + x, y).text = str(data.loc[x, data.columns.tolist()[y]])
+                self.style_cell(self.document.tables[15].cell(2 + x, y), '宋体', 177800)
         data = lc.area()
         for x in range(len(data)):
             for y in range(3):
                 self.document.tables[18].cell(2 + x, y).text = str(data.loc[x, data.columns.tolist()[y]])
+                self.style_cell(self.document.tables[18].cell(2 + x, y), '宋体', 177800)
 
         data = ty.duration()
         for x in range(4):
             for y in range(2):
                 self.document.tables[19].cell(1 + x, 1 + y).text = str(data[x][y])
+                self.style_cell(self.document.tables[19].cell(1 + x, 1 + y), '宋体', 177800)
         data = lc.duration()
         for x in range(4):
             for y in range(2):
                 self.document.tables[19].cell(5 + x, 1 + y).text = str(data[x][y])
+                self.style_cell(self.document.tables[19].cell(5 + x, 1 + y), '宋体', 177800)
 
+        self.document.tables[20].cell(2, 1).text = str(
+            round(ty.bs.asset.loc[ty.bs.loan['产品分类'] == '回购', '市值'].sum() / bank.get_net(), 2))
+        self.style_cell(self.document.tables[20].cell(2, 1), '宋体', 177800)
+        self.document.tables[20].cell(3, 1).text = str(
+            round(ty.bs.asset.loc[ty.bs.asset['产品分类'] == '回购', '市值'].sum() / bank.get_net(), 2))
+        self.style_cell(self.document.tables[20].cell(3, 1), '宋体', 177800)
         # level table[20]
 
-        data = ty.ratio()
+        data = ty.ratio(bank.get_asset())
         for x in range(8):
             self.document.tables[21].cell(1 + x, 1).text = str(data[x])
-        data = lc.ratio()
+            self.style_cell(self.document.tables[21].cell(1 + x, 1), '宋体', 177800)
+        data = lc.ratio(bank.get_asset())
         for x in range(8):
             self.document.tables[21].cell(1 + x, 2).text = str(data[x])
+            self.style_cell(self.document.tables[21].cell(1 + x, 2), '宋体', 177800)
 
         if len(ty.bs.asset[ty.bs.asset['产品分类'] == '货币基金']) > 0:
             data = MMF(ty.bs.asset[ty.bs.asset['产品分类'] == '货币基金']).ratio()
             for x in range(5):
                 self.document.tables[22].cell(2 + x, 1).text = str(data[x])
+                self.style_cell(self.document.tables[22].cell(2 + x, 1), '宋体', 177800)
         else:
             self.document.tables[22].cell(2, 1).text = "无业务"
+            self.style_cell(self.document.tables[22].cell(2, 1), '宋体', 177800)
 
         self.document.tables[23].cell(1, 1).text = self.document.tables[19].cell(1, 2).text
+        self.style_cell(self.document.tables[23].cell(1, 1), '宋体', 177800)
         self.document.tables[23].cell(2, 1).text = self.document.tables[19].cell(5, 2).text
-        # 1 2
+        self.style_cell(self.document.tables[23].cell(2, 1), '宋体', 177800)
+        data1 = float(self.document.tables[20].cell(2, 1).text[:-1])
+        data2 = float(self.document.tables[20].cell(3, 1).text[:-1])
+        if data1 > data2:
+            self.document.tables[23].cell(3, 1).text = self.document.tables[20].cell(2, 1).text
+        else:
+            self.document.tables[23].cell(3, 1).text = self.document.tables[20].cell(3, 1).text
+        self.style_cell(self.document.tables[23].cell(3, 1), '宋体', 177800)
+        # 4
+
+        data_ty = ty.lost()
+        data_lc = lc.lost()
+        size = len(data_ty[0]) + len(data_ty[1]) + len(data_ty[2]) + len(data_lc[0]) + len(data_lc[1]) + len(data_lc[2])
+        self.sharp_table(self.document.tables[24], size + 2)
+        i = 1
+        for x in data_ty:
+            if len(x) > 0:
+                for y in x.index.tolist():
+                    self.document.tables[24].cell(i, 0).text = x.loc[y, '名称']
+                    self.style_cell(self.document.tables[24].cell(i, 0), '宋体', 177800)
+                    self.document.tables[24].cell(i, 1).text = '同业业务中心'
+                    self.style_cell(self.document.tables[24].cell(i, 1), '宋体', 177800)
+                    self.document.tables[24].cell(i, 2).text = str(x.loc[y, '止损限额']) + '%'
+                    self.style_cell(self.document.tables[24].cell(i, 2), '宋体', 177800)
+                    self.document.tables[24].cell(i, 3).text = ['≤16%', '≤23%', '≤40%'][x]
+                    self.style_cell(self.document.tables[24].cell(i, 3), '宋体', 177800)
+                    i += 1
+        for x in data_lc:
+            if len(x) > 0:
+                for y in x.index.tolist():
+                    self.document.tables[24].cell(i, 0).text = x.loc[y, '名称']
+                    self.style_cell(self.document.tables[24].cell(i, 0), '宋体', 177800)
+                    self.document.tables[24].cell(i, 1).text = '同业业务中心'
+                    self.style_cell(self.document.tables[24].cell(i, 1), '宋体', 177800)
+                    self.document.tables[24].cell(i, 2).text = str(x.loc[y, '止损限额']) + '%'
+                    self.style_cell(self.document.tables[24].cell(i, 2), '宋体', 177800)
+                    self.document.tables[24].cell(i, 3).text = ['≤16%', '≤23%', '≤40%'][x]
+                    self.style_cell(self.document.tables[24].cell(i, 3), '宋体', 177800)
+                    i += 1
+
+        data_ty = ty.credit_limit()
+        data_lc = lc.credit_limit()
+        if data_ty[0] > 0.2:
+            if data_lc[0] > 0.2:
+                self.document.tables[25].cell(1, 1).text = str(data_ty[1]) + '\n' + str(data_lc[1])
+            else:
+                self.document.tables[25].cell(1, 1).text = str(data_ty[1])
+        else:
+            if data_lc[0] > 0.2:
+                self.document.tables[25].cell(1, 1).text = str(data_lc[1])
+            else:
+                if data_ty[0] > data_lc[0]:
+                    self.document.tables[25].cell(1, 1).text = '≤' + str(round(data_ty[0] * 100, 0))
+                else:
+                    self.document.tables[25].cell(1, 1).text = '≤' + str(round(data_lc[0] * 100, 0))
+        self.style_cell(self.document.tables[25].cell(1, 1), '宋体', 177800)
+
+        data = ty.bs.bond.asset_abs()
+        res = [bank.get_anonymous_special(),
+               ty.bs.asset.loc[ty.bs.asset['产品分类'] == '货币基金', '市值'].sum(),
+               data.loc[(data['ABS基础资产类型'] == '航空票款') | (data['ABS基础资产类型'] == '基础设施收费'), '市值'].sum()]
+        self.document.tables[26].cell(2, 2).text = str(round(res[0], 2))
+        self.style_cell(self.document.tables[26].cell(2, 2), '宋体', 177800)
+        self.document.tables[26].cell(3, 2).text = str(
+            round(res[1], 2))
+        self.style_cell(self.document.tables[26].cell(3, 2), '宋体', 177800)
+        self.document.tables[26].cell(4, 2).text = str(round(res[2], 2))
+        self.style_cell(self.document.tables[26].cell(4, 2), '宋体', 177800)
+        res.append(sum(res))
+        self.document.tables[26].cell(5, 1).text = str(round(res[3], 2))
+        self.style_cell(self.document.tables[26].cell(5, 1), '宋体', 177800)
+        res.append(bank.get_capital())
+        self.document.tables[26].cell(6, 1).text = str(round(res[4], 2))
+        self.style_cell(self.document.tables[26].cell(6, 1), '宋体', 177800)
+        self.document.tables[26].cell(7, 1).text = str(round(res[3] / res[4]*100, 2)) + '%'
+        self.style_cell(self.document.tables[26].cell(7, 1), '宋体', 177800)
 
         if os.path.exists('风险管理部金融市场风险监测报告.docx'):
             os.remove('风险管理部金融市场风险监测报告.docx')
