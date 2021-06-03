@@ -235,6 +235,7 @@ class Function:
                 tmp = tmp[tmp['市值'] != 0].copy(deep=True)
                 tmp.loc[(tmp['市值'] > 0) & (tmp['产品分类'] == '质押式回购'), '产品分类'] = '买入返售金融资产'
                 tmp.loc[(tmp['市值'] < 0) & (tmp['产品分类'] == '质押式回购'), '产品分类'] = '卖出回购金融资产款'
+                tmp['建仓时间'] = tmp['建仓时间'].map(lambda z: pd.to_datetime(z.split()[0], format='%Y-%m-%d'))
                 tmp.columns = ['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日']
                 self.data = self.data.append(tmp)
                 self.data = self.data.reset_index(drop=True)
@@ -553,10 +554,51 @@ class MMF:
 
 class ETF:
     def __init__(self, data):
-        self.data = data
+        self.etf = data.bs.asset[data.bs.asset['名称'].str.contains('etf|ETF')]
+        self.net = data.bs.loan[data.bs.loan['产品分类'] == '理财产品'].groupby('投组单元名称', as_index=False)['市值'].sum()
+        self.net = self.net[['投组单元名称', '净资产']]
+        self.date = str(data.bs.asset.loc[0, '业务日期']).replace("-", "")
+        self.flag = False
 
     def wind(self):
-        pass
+        if not self.flag:
+            etf = list(set(self.etf['名称'].tolist()))
+            db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+            cur = db.cursor()
+            code = pd.read_sql("select name,code from partner_code where name in ('" + "','".join(etf) + "')", db)
+            for x in etf:
+                if x not in code['name'].tolist():
+                    new_code = input("请补充" + x + "对应的代码：")
+                    code.loc[x, 'code'] = new_code
+                    cur.execute("insert into partner_code values('" + x + "','" + new_code + "'")
+            db.commit()
+            if not w.isconnected():
+                w.start()
+            etf = w.wss(",".join(code['code'].tolist()), "close", "tradeDate=" + self.date + ";priceAdj=U;cycle=D",
+                        usedf=True)
+            self.etf = pd.merge(self.etf, code, how='left', left_on='名称', right_on='name')
+            self.etf = pd.merge(self.etf, etf, how='left', left_on='code', right_index=True)
+            self.flag = True
+
+    def get(self):
+        if not self.flag:
+            self.wind()
+        ratio = self.etf.groupby('投组单元名称', as_index=False)['市值'].sum()
+        ratio.columns = ['投组单元名称', 'etf']
+        ratio = pd.merge(ratio, self.net, how='left', on='投组单元名称')
+        ratio['ratio'] = ratio['etf'] / ratio['净资产']
+        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='cost', charset='utf8')
+        cost = pd.read_sql("select name,cost from cost_etf", db)
+        self.etf = pd.merge(self.etf, cost, how='left', left_on='名称', right_on='name')
+        earn = ((self.etf['close'] - self.etf['cost']) / self.etf['cost']).max() * 100
+        lost = ((self.etf['close'] - self.etf['cost']) / self.etf['cost']).min() * 100
+        out = [
+            str(round(self.etf['市值'].sum(), 2)),
+            "≤" + str(round(self.etf['市值'].max(), 2)),
+            "≤" + str(round(ratio['ratio'].max(), 2)),
+            [round(earn, 2), round(lost, 2)]
+        ]
+        return out
 
 
 class Party:
@@ -581,18 +623,29 @@ class Party:
                 code.loc[x, 'code'] = new_code
                 cur.execute("insert into partner_code values('" + x + "','" + new_code + "'")
         db.commit()
+        bad = pd.merge(code[code['code'] == 'BAD'], self.data, how='left', left_on='名称', right_on='name')
+        bad = bad[['对手方', '方向', '部门', '金额']]
+        code = code[(code['code'] != 'BAD') & (code['code'] != 'GOOD')]
         if not w.isconnected():
             w.start()
         tmp = w.wss(",".join(code['code'].tolist()), "regcapital,latestissurercreditrating",
                     "tradeDate=" + self.fix_date + ";industryType=3;unit=1", usedf=True)[1]
         tmp = tmp[(tmp['REGCAPITAL'] < 100000000000) & (tmp['LATESTISSURERCREDITRATING'] != 'AAA')]
         if len(tmp) > 0:
-            pass
+            self.data = pd.merge(code, self.data, how='left', left_on='name', right_on='名称')
+            self.data = pd.merge(tmp, self.data, how='left', left_on='code', right_index=True)
+            self.data = self.data[['对手方', '方向', '部门', '金额']]
+            self.data = self.data.append(bad)
+        elif len(bad) > 0:
+            self.data = bad
         else:
             self.data = pd.DataFrame()
 
     def get(self):
-        return self.data
+        out = None
+        if len(self.data) > 0:
+            out = self.data.groupby(['对手方', '方向', '部门'])['金额'].agg(['sum', 'count', 'max', 'min'])
+        return out
 
 
 class BalanceSheet:
@@ -738,6 +791,39 @@ class Word:
                 run.font.size = size
                 run.font.bold = bold
 
+    def leverage_ty(self, data, info):
+        self.document.tables[20].cell(2, 1).text = str(
+            round(data.bs.loan.loc[data.bs.loan['产品分类'] == '回购', '市值'].sum() / info.get_net(), 2))
+        self.style_cell(self.document.tables[20].cell(2, 1), '宋体', 177800)
+        self.document.tables[20].cell(3, 1).text = str(
+            round(data.bs.asset.loc[data.bs.asset['产品分类'] == '回购', '市值'].sum() / info.get_net(), 2))
+        self.style_cell(self.document.tables[20].cell(3, 1), '宋体', 177800)
+
+    def leverage_lc(self, data):
+        name_list = list(set(data.bs.asset['投组单元名称'].tolist()))
+        for x in range(len(name_list)):
+            name = name_list[x]
+            total = data.bs.asset['市值'].sum()
+            self.document.tables[20].add_row()
+            self.document.tables[20].cell(5 + 3 * x, 0).text = name + "杠杆率"
+            self.style_cell(self.document.tables[20].cell(5 + 3 * x, 0), '宋体', 177800)
+            self.document.tables[20].cell(5 + 3 * x, 1).text = total / data.bs.loan.loc[
+                (data.bs.loan['投组单元名称'] == name) & (data.bs.loan['产品分类'] == '理财产品'), '市值'].sum()
+            self.style_cell(self.document.tables[20].cell(5 + 3 * x, 1), '宋体', 177800)
+            self.document.tables[20].add_row()
+            self.document.tables[20].cell(6 + 3 * x, 0).text = name + "逆回购杠杆率"
+            self.style_cell(self.document.tables[20].cell(6 + 3 * x, 0), '宋体', 177800)
+            self.document.tables[20].cell(6 + 3 * x, 1).text = data.bs.asset.loc[(data.bs.asset['投组单元名称'] == name) & (
+                    data.bs.asset['产品分类'] == '买入返售金融资产'), '市值'].sum() / total
+            self.style_cell(self.document.tables[20].cell(6 + 3 * x, 1), '宋体', 177800)
+            self.document.tables[20].add_row()
+            self.document.tables[20].cell(7 + 3 * x, 0).text = name + "正回购杠杆率"
+            self.style_cell(self.document.tables[20].cell(7 + 3 * x, 0), '宋体', 177800)
+            self.document.tables[20].cell(7 + 3 * x, 1).text = data.bs.loan.loc[(data.bs.loan['投组单元名称'] == name) & (
+                    data.bs.loan['产品分类'] == '卖出回购金融资产款'), '市值'].sum() / total
+            self.style_cell(self.document.tables[20].cell(7 + 3 * x, 1), '宋体', 177800)
+        self.delete_row(self.document.tables[20], len(self.document.tables[20]) - 1)
+
     def go(self):
         ty = Department("同业业务中心")
         lc = Department("理财事业部")
@@ -790,6 +876,10 @@ class Word:
         self.style_cell(self.document.tables[5].cell(2 + size, 4), '宋体', 177800, True)
 
         data, big = ty.concentration()
+        self.document.tables[1].cell(1, 1).text = str(sum([int(x[0]) for x in data]))
+        self.style_cell(self.document.tables[0].cell(1, 1), '宋体', 177800)
+        self.document.tables[13].cell(6, 1).text = str(sum([int(x[0]) for x in data]))
+        self.style_cell(self.document.tables[0].cell(1, 1), '宋体', 177800, True)
         for x in range(4):
             for y in range(4):
                 self.document.tables[13].cell(2 + x, 1 + y).text = data[x][y]
@@ -830,13 +920,8 @@ class Word:
                 self.document.tables[19].cell(5 + x, 1 + y).text = str(data[x][y])
                 self.style_cell(self.document.tables[19].cell(5 + x, 1 + y), '宋体', 177800)
 
-        self.document.tables[20].cell(2, 1).text = str(
-            round(ty.bs.asset.loc[ty.bs.loan['产品分类'] == '回购', '市值'].sum() / bank.get_net(), 2))
-        self.style_cell(self.document.tables[20].cell(2, 1), '宋体', 177800)
-        self.document.tables[20].cell(3, 1).text = str(
-            round(ty.bs.asset.loc[ty.bs.asset['产品分类'] == '回购', '市值'].sum() / bank.get_net(), 2))
-        self.style_cell(self.document.tables[20].cell(3, 1), '宋体', 177800)
-        # level table[20]
+        self.leverage_ty(ty, bank)
+        self.leverage_lc(lc)
 
         data = ty.ratio(bank.get_asset())
         for x in range(8):
@@ -943,11 +1028,47 @@ class Word:
         self.document.tables[26].cell(7, 1).text = str(round(res[3] / res[4] * 100, 2)) + '%'
         self.style_cell(self.document.tables[26].cell(7, 1), '宋体', 177800)
 
-        # etf
+        data = ETF(lc).get()
+        self.document.tables[27].cell(1, 1).text = data[0]
+        self.style_cell(self.document.tables[27].cell(1, 1), '宋体', 177800)
+        self.document.tables[27].cell(2, 1).text = data[1]
+        self.style_cell(self.document.tables[27].cell(2, 1), '宋体', 177800)
+        self.document.tables[27].cell(3, 1).text = data[2]
+        self.style_cell(self.document.tables[27].cell(3, 1), '宋体', 177800)
+        if data[3][0] < 0:
+            self.document.tables[27].cell(4, 1).text = '无浮盈ETF'
+            self.style_cell(self.document.tables[27].cell(4, 1), '宋体', 177800)
+        else:
+            self.document.tables[27].cell(4, 1).text = str(data[3][0])
+            self.style_cell(self.document.tables[27].cell(4, 1), '宋体', 177800)
+        if data[3][1] > 0:
+            self.document.tables[27].cell(5, 1).text = '无浮亏ETF'
+            self.style_cell(self.document.tables[27].cell(4, 1), '宋体', 177800)
+        else:
+            self.document.tables[27].cell(5, 1).text = str(-data[3][1])
+            self.style_cell(self.document.tables[27].cell(4, 1), '宋体', 177800)
 
         data = ty.stream_description()
         self.sharp_table(self.document.tables[6], len(data[0]) + 2)
         self.sharp_table(self.document.tables[7], len(data[1]) + 2)
+        self.document.tables[0].cell(1, 1).text = "、".join([x[0] for x in list(data[0].index)])
+        self.style_cell(self.document.tables[0].cell(1, 1), '宋体', 177800)
+        self.document.tables[0].cell(1, 2).text = str(round(data[0]['count'].sum(), 2))
+        self.style_cell(self.document.tables[0].cell(1, 2), '宋体', 177800)
+        self.document.tables[6].cell(len(data[0]) + 1, 1).text = str(round(data[0]['count'].sum(), 2))
+        self.style_cell(self.document.tables[6].cell(len(data[0]) + 1, 1), '宋体', 177800, True)
+        self.document.tables[0].cell(1, 3).text = str(round(data[0]['sum'].sum(), 2))
+        self.style_cell(self.document.tables[0].cell(1, 3), '宋体', 177800)
+        self.document.tables[6].cell(len(data[0]) + 1, 2).text = str(round(data[0]['sum'].sum(), 2))
+        self.style_cell(self.document.tables[6].cell(len(data[0]) + 1, 2), '宋体', 177800, True)
+        self.document.tables[0].cell(1, 4).text = str(round(data[0]['max'].max(), 2))
+        self.style_cell(self.document.tables[0].cell(1, 4), '宋体', 177800)
+        self.document.tables[6].cell(len(data[0]) + 1, 3).text = str(round(data[0]['max'].max(), 2))
+        self.style_cell(self.document.tables[6].cell(len(data[0]) + 1, 3), '宋体', 177800, True)
+        self.document.tables[0].cell(1, 5).text = str(round(data[0]['min'].min(), 2))
+        self.style_cell(self.document.tables[0].cell(1, 5), '宋体', 177800)
+        self.document.tables[6].cell(len(data[0]) + 1, 3).text = str(round(data[0]['min'].min(), 2))
+        self.style_cell(self.document.tables[6].cell(len(data[0]) + 1, 3), '宋体', 177800, True)
         for x in range(len(data[0])):
             self.document.tables[6].cell(1 + x, 0).text = data[0].index[x][0]
             self.style_cell(self.document.tables[6].cell(1 + x, 0), '宋体', 177800)
@@ -977,6 +1098,24 @@ class Word:
         data = lc.stream_description()
         self.sharp_table(self.document.tables[8], len(data[0]) + 2)
         self.sharp_table(self.document.tables[9], len(data[1]) + 2)
+        self.document.tables[0].cell(2, 1).text = "、".join([x[0] for x in list(data[0].index)])
+        self.style_cell(self.document.tables[0].cell(2, 1), '宋体', 177800)
+        self.document.tables[0].cell(2, 2).text = str(round(data[0]['count'].sum(), 2))
+        self.style_cell(self.document.tables[0].cell(2, 2), '宋体', 177800)
+        self.document.tables[7].cell(len(data[0]) + 1, 1).text = str(round(data[0]['count'].sum(), 2))
+        self.style_cell(self.document.tables[7].cell(len(data[0]) + 1, 1), '宋体', 177800, True)
+        self.document.tables[0].cell(2, 3).text = str(round(data[0]['sum'].sum(), 2))
+        self.style_cell(self.document.tables[0].cell(2, 3), '宋体', 177800)
+        self.document.tables[7].cell(len(data[0]) + 1, 2).text = str(round(data[0]['sum'].sum(), 2))
+        self.style_cell(self.document.tables[7].cell(len(data[0]) + 1, 2), '宋体', 177800, True)
+        self.document.tables[0].cell(2, 4).text = str(round(data[0]['max'].max(), 2))
+        self.style_cell(self.document.tables[0].cell(2, 4), '宋体', 177800)
+        self.document.tables[7].cell(len(data[0]) + 1, 3).text = str(round(data[0]['max'].max(), 2))
+        self.style_cell(self.document.tables[7].cell(len(data[0]) + 1, 3), '宋体', 177800, True)
+        self.document.tables[0].cell(2, 5).text = str(round(data[0]['min'].min(), 2))
+        self.style_cell(self.document.tables[0].cell(2, 5), '宋体', 177800)
+        self.document.tables[7].cell(len(data[0]) + 1, 3).text = str(round(data[0]['min'].min(), 2))
+        self.style_cell(self.document.tables[7].cell(len(data[0]) + 1, 3), '宋体', 177800, True)
         for x in range(len(data[0])):
             self.document.tables[8].cell(1 + x, 0).text = data[0].index[x][0]
             self.style_cell(self.document.tables[8].cell(1 + x, 0), '宋体', 177800)
@@ -1007,7 +1146,20 @@ class Word:
         data = Party(ty.stream.stream, lc.stream.stream, bank.date).get()
         self.sharp_table(self.document.tables[10], len(data) + 4)
         for x in range(len(data)):
-            pass
+            self.document.tables[10].cell(2 + x, 0).text = data.index[x][0]
+            self.style_cell(self.document.tables[10].cell(2 + x, 0), '宋体', 177800)
+            self.document.tables[10].cell(2 + x, 1).text = data.index[x][1]
+            self.style_cell(self.document.tables[10].cell(2 + x, 1), '宋体', 177800)
+            self.document.tables[10].cell(2 + x, 2).text = data.index[x][2]
+            self.style_cell(self.document.tables[10].cell(2 + x, 2), '宋体', 177800)
+            self.document.tables[10].cell(2 + x, 3).text = data.loc[data.index[x], 'sum']
+            self.style_cell(self.document.tables[10].cell(2 + x, 3), '宋体', 177800)
+            self.document.tables[10].cell(2 + x, 4).text = data.loc[data.index[x], 'count']
+            self.style_cell(self.document.tables[10].cell(2 + x, 4), '宋体', 177800)
+            self.document.tables[10].cell(2 + x, 5).text = data.loc[data.index[x], 'max']
+            self.style_cell(self.document.tables[10].cell(2 + x, 5), '宋体', 177800)
+            self.document.tables[10].cell(2 + x, 6).text = data.loc[data.index[x], 'min']
+            self.style_cell(self.document.tables[10].cell(2 + x, 6), '宋体', 177800)
 
         if os.path.exists('风险管理部金融市场风险监测报告.docx'):
             os.remove('风险管理部金融市场风险监测报告.docx')
