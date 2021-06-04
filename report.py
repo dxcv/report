@@ -237,6 +237,14 @@ class Function:
                 tmp.loc[(tmp['市值'] < 0) & (tmp['产品分类'] == '质押式回购'), '产品分类'] = '卖出回购金融资产款'
                 tmp['建仓时间'] = tmp['建仓时间'].map(lambda z: pd.to_datetime(z.split()[0], format='%Y-%m-%d'))
                 tmp.columns = ['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日']
+                tmp['name'] = tmp['投组单元名称'] + tmp['名称']
+                db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='cost',
+                                     charset='utf8')
+                cost = pd.read_sql("select part,name,cost from licai", db)
+                cost['name'] = cost['part'] + cost['name']
+                tmp = pd.merge(tmp, cost, how='left', on='name')
+                tmp = tmp[['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', 'cost']]
+                tmp.columns = ['业务日期', '投组单元名称', '产品分类', '名称', '市值', '到期日', '起息日', '成本']
                 self.data = self.data.append(tmp)
                 self.data = self.data.reset_index(drop=True)
 
@@ -340,6 +348,48 @@ class Function:
                 tmp['交易投组'] = tmp['Unnamed: 4']
                 tmp['对手方'] = tmp['对手名称']
                 tmp['净价'] = tmp['Unnamed: 16']
+                tmp.sort_values(by=['交易日'], inplace=True)
+                tmp = tmp.reset_index(drop=True)
+                db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='cost',
+                                     charset='utf8')
+                cost = pd.read_sql("select part,name,cost,amount from licai", db)
+                cost['match'] = cost['part'] + cost['name']
+                tmp['match'] = tmp['交易投组'] + tmp['名称']
+                for x in range(len(tmp)):
+                    if tmp.loc[x, '方向'] == '现券买入':
+                        cost_match = cost.loc[cost['match'] == tmp.loc[x, 'match'], ['cost', 'amount']]
+                        cost_match = cost_match.reset_index(drop=True)
+                        if len(cost_match) > 0:
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'] = tmp.loc[x, 'Unnamed: 15'] / 100 \
+                                                                                       + cost_match.loc[0, 'amount']
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'cost'] = (tmp.loc[x, 'Unnamed: 15'] / 100 *
+                                                                                      tmp.loc[x, '净价'] +
+                                                                                      cost_match.loc[0, 'cost'] *
+                                                                                      cost_match.loc[0, 'amount']) / \
+                                                                                     (tmp.loc[x, 'Unnamed: 15'] / 100 +
+                                                                                      cost_match.loc[0, 'amount'])
+                        else:
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'] = tmp.loc[x, 'Unnamed: 15'] / 100
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'cost'] = tmp.loc[x, '净价']
+                    else:
+                        res = cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'].sum() - tmp.loc[
+                            x, 'Unnamed: 15'].sum() / 100
+                        if res <= 0:
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'] = 0
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'cost'] = 0
+                        else:
+                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'] = res
+                cost = cost[cost['cost'] > 0]
+                cost = cost.reset_index(drop=True)
+                cost = cost[['part', 'name', 'cost', 'amount']]
+                cur = db.cursor()
+                cur.execute("delete from licai")
+                for x in range(len(cost)):
+                    cur.execute("insert into licai values('" + str(cost.loc[x, 'part']) + "','" + str(
+                        cost.loc[x, 'name']) + "','" + str(cost.loc[x, 'cost']) + "','" + str(
+                        cost.loc[x, 'amount']) + "')")
+                db.commit()
+                db.close()
                 tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方', '净价']]
                 self.flow = self.flow.append(tmp)
                 self.flow = self.flow.reset_index(drop=True)
@@ -348,10 +398,10 @@ class Function:
                 tmp = pd.read_excel("data/债券交易.xls")
                 tmp['名称'] = tmp['债券简称']
                 tmp['类别'] = '债券'
-                tmp['交易日'] = tmp['交割日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['交易日'] = tmp['交割日'].map(lambda lambda_x: pd.to_datetime(lambda_x, format='%Y-%m-%d'))
                 tmp['方向'] = tmp['交易方向']
                 tmp['金额'] = tmp['交易金额'] / 100000000
-                tmp['交易投组'] = tmp['账户'].map(lambda x: x[:x.rfind("(")])
+                tmp['交易投组'] = tmp['账户'].map(lambda lambda_x: lambda_x[:lambda_x.rfind("(")])
                 tmp['对手方'] = tmp['交易对手']
                 tmp['净价'] = (tmp['全价总额'] - tmp['应计利息总额']) / tmp['券面总额'] * 100
                 tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方', '净价']]
@@ -362,10 +412,10 @@ class Function:
                 tmp = pd.read_excel("data/债券质押式回购交易.xls")
                 tmp['名称'] = '回购'
                 tmp['类别'] = '回购'
-                tmp['交易日'] = tmp['起息日'].map(lambda x: pd.to_datetime(x, format='%Y-%m-%d'))
+                tmp['交易日'] = tmp['起息日'].map(lambda lambda_x: pd.to_datetime(lambda_x, format='%Y-%m-%d'))
                 tmp['方向'] = tmp['回购方向']
                 tmp['金额'] = tmp['成交金额'] / 100000000
-                tmp['交易投组'] = tmp['账户'].map(lambda x: x[:x.rfind("(")])
+                tmp['交易投组'] = tmp['账户'].map(lambda lambda_x: lambda_x[:lambda_x.rfind("(")])
                 tmp['对手方'] = tmp['交易对手']
                 tmp = tmp[['名称', '类别', '交易日', '方向', '金额', '交易投组', '对手方']]
                 self.flow = self.flow.append(tmp)
