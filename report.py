@@ -804,7 +804,7 @@ class Department:
 
     def deviate(self):
         res = self.stream.bond
-        res['交易价格偏离度'] = abs(res['净价'] - res['估值净价'] / res['估值净价'])
+        res['交易价格偏离度'] = abs((res['净价'] - res['估值净价']) / res['估值净价'])
         return res['交易价格偏离度'].max()
 
     def stream_description(self):
@@ -874,7 +874,7 @@ class Word:
                 round(data.bs.loan.loc[(data.bs.loan['投组单元名称'] == name) & (
                         data.bs.loan['产品分类'] == '卖出回购金融资产款'), '市值'].sum() / total, 2))
             self.style_cell(self.document.tables[20].cell(7 + 3 * x, 1), '宋体', 177800)
-        self.delete_row(self.document.tables[20], len(self.document.tables[20]) - 1)
+        self.delete_row(self.document.tables[20], len(self.document.tables[20].rows) - 1)
 
     def go(self):
         ty = Department("同业业务中心")
