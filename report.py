@@ -607,7 +607,7 @@ class ETF:
         self.etf = data.bs.asset[data.bs.asset['名称'].str.contains('etf|ETF')]
         self.net = data.bs.loan[data.bs.loan['产品分类'] == '理财产品'].groupby('投组单元名称', as_index=False)['市值'].sum()
         self.net.columns = ['投组单元名称', '净资产']
-        self.date = str(data.bs.asset.loc[0, '业务日期']).replace("-", "")
+        self.date = str(data.bs.asset.loc[0, '业务日期']).split()[0].replace("-", "")
         self.flag = False
 
     def wind(self):
@@ -615,17 +615,17 @@ class ETF:
             etf = list(set(self.etf['名称'].tolist()))
             db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
             cur = db.cursor()
-            code = pd.read_sql("select name,code from partner_code where name in ('" + "','".join(etf) + "')", db)
+            code = pd.read_sql("select name,code from etf_code where name in ('" + "','".join(etf) + "')", db)
             for x in etf:
                 if x not in code['name'].tolist():
                     new_code = input("请补充" + x + "对应的代码：")
                     code.loc[x, 'code'] = new_code
-                    cur.execute("insert into partner_code values('" + x + "','" + new_code + "'")
+                    cur.execute("insert into etf_code values('" + x + "','" + new_code + "'")
             db.commit()
             if not w.isconnected():
                 w.start()
             etf = w.wss(",".join(code['code'].tolist()), "close", "tradeDate=" + self.date + ";priceAdj=U;cycle=D",
-                        usedf=True)
+                        usedf=True)[1]
             self.etf = pd.merge(self.etf, code, how='left', left_on='名称', right_on='name')
             self.etf = pd.merge(self.etf, etf, how='left', left_on='code', right_index=True)
             self.flag = True
@@ -638,10 +638,10 @@ class ETF:
         ratio = pd.merge(ratio, self.net, how='left', on='投组单元名称')
         ratio['ratio'] = ratio['etf'] / ratio['净资产']
         db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='cost', charset='utf8')
-        cost = pd.read_sql("select name,cost from cost_etf", db)
+        cost = pd.read_sql("select name,cost from etf", db)
         self.etf = pd.merge(self.etf, cost, how='left', left_on='名称', right_on='name')
-        earn = ((self.etf['close'] - self.etf['cost']) / self.etf['cost']).max() * 100
-        lost = ((self.etf['close'] - self.etf['cost']) / self.etf['cost']).min() * 100
+        earn = ((self.etf['CLOSE'] - self.etf['cost']) / self.etf['cost']).max() * 100
+        lost = ((self.etf['CLOSE'] - self.etf['cost']) / self.etf['cost']).min() * 100
         out = [
             str(round(self.etf['市值'].sum(), 2)),
             "≤" + str(round(self.etf['市值'].max(), 2)),
@@ -654,44 +654,50 @@ class ETF:
 class Party:
     def __init__(self, ty, lc, fix_date):
         self.fix_date = str(pd.to_datetime(fix_date, format='%Y/%m/%d')).replace('-', '')
-        ty['方向'] = ty['类别'] + ty['方向']
-        ty['部门'] = '自营'
-        self.data = ty[['对手方', '方向', '部门', '金额']].copy(deep=True)
-        lc['方向'] = ty['类别'] + ty['方向']
-        lc['部门'] = '理财'
-        lc = lc[['对手方', '方向', '部门', '金额']].copy(deep=True)
-        self.data = self.data.append(lc)
+        tmp = ty.copy(deep=True)
+        tmp['方向'] = tmp['类别'] + tmp['方向']
+        tmp['部门'] = '自营'
+        self.data = tmp[['对手方', '方向', '部门', '金额']].copy(deep=True)
+        tmp = lc.copy(deep=True)
+        tmp['方向'] = tmp['类别'] + tmp['方向']
+        tmp['部门'] = '理财'
+        tmp = tmp[['对手方', '方向', '部门', '金额']].copy(deep=True)
+        self.data = self.data.append(tmp)
+        self.flag = False
 
     def wind(self):
-        partner = list(set(self.data['对手方'].tolist()))
-        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
-        cur = db.cursor()
-        code = pd.read_sql("select name,code from partner_code where name in ('" + "','".join(partner) + "')", db)
-        for x in partner:
-            if x not in code['name'].tolist():
-                new_code = input("请补充" + x + "对应的代码：")
-                code.loc[x, 'code'] = new_code
-                cur.execute("insert into partner_code values('" + x + "','" + new_code + "'")
-        db.commit()
-        bad = pd.merge(code[code['code'] == 'BAD'], self.data, how='left', left_on='名称', right_on='name')
-        bad = bad[['对手方', '方向', '部门', '金额']]
-        code = code[(code['code'] != 'BAD') & (code['code'] != 'GOOD')]
-        if not w.isconnected():
-            w.start()
-        tmp = w.wss(",".join(code['code'].tolist()), "regcapital,latestissurercreditrating",
-                    "tradeDate=" + self.fix_date + ";industryType=3;unit=1", usedf=True)[1]
-        tmp = tmp[(tmp['REGCAPITAL'] < 100000000000) & (tmp['LATESTISSURERCREDITRATING'] != 'AAA')]
-        if len(tmp) > 0:
-            self.data = pd.merge(code, self.data, how='left', left_on='name', right_on='名称')
-            self.data = pd.merge(tmp, self.data, how='left', left_on='code', right_index=True)
-            self.data = self.data[['对手方', '方向', '部门', '金额']]
-            self.data = self.data.append(bad)
-        elif len(bad) > 0:
-            self.data = bad
-        else:
-            self.data = pd.DataFrame()
+        if not self.flag:
+            partner = list(set(self.data['对手方'].tolist()))
+            db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+            cur = db.cursor()
+            code = pd.read_sql("select name,code from partner_code where name in ('" + "','".join(partner) + "')", db)
+            for x in partner:
+                if x not in code['name'].tolist():
+                    new_code = input("请补充" + x + "对应的代码：")
+                    code.loc[x, 'code'] = new_code
+                    cur.execute("insert into partner_code values('" + x + "','" + new_code + "')")
+            db.commit()
+            bad = pd.merge(code[code['code'] == 'BAD'], self.data, how='left', left_on='name', right_on='对手方')
+            bad = bad[['对手方', '方向', '部门', '金额']]
+            code = code[(code['code'] != 'BAD') & (code['code'] != 'GOOD')]
+            if not w.isconnected():
+                w.start()
+            tmp = w.wss(",".join(list(set(code['code'].tolist()))), "regcapital,latestissurercreditrating",
+                        "tradeDate=" + self.fix_date + ";industryType=3;unit=1", usedf=True)[1]
+            tmp = tmp[(tmp['REGCAPITAL'] < 100000000000) & (tmp['LATESTISSURERCREDITRATING'] != 'AAA')]
+            if len(tmp) > 0:
+                self.data = pd.merge(code, self.data, how='left', left_on='name', right_on='对手方')
+                self.data = pd.merge(tmp, self.data, how='left', left_on='code', right_index=True)
+                self.data = self.data[['对手方', '方向', '部门', '金额']]
+                self.data = self.data.append(bad)
+            elif len(bad) > 0:
+                self.data = bad
+            else:
+                self.data = pd.DataFrame()
 
     def get(self):
+        if not self.flag:
+            self.wind()
         out = None
         if len(self.data) > 0:
             out = self.data.groupby(['对手方', '方向', '部门'])['金额'].agg(['sum', 'count', 'max', 'min'])
@@ -1204,7 +1210,7 @@ class Word:
             self.style_cell(self.document.tables[8].cell(1 + x, 2), '宋体', 177800)
             self.document.tables[8].cell(1 + x, 3).text = str(round(data[0].loc[data[0].index[x], 'sum'].sum(), 2))
             self.style_cell(self.document.tables[8].cell(1 + x, 3), '宋体', 177800)
-            self.document.tables[8].cell(1 + x, 4).text = str(round(data[0].loc[data[0].index[x], 'max'].sum, 2))
+            self.document.tables[8].cell(1 + x, 4).text = str(round(data[0].loc[data[0].index[x], 'max'].sum(), 2))
             self.style_cell(self.document.tables[8].cell(1 + x, 4), '宋体', 177800)
             self.document.tables[8].cell(1 + x, 5).text = str(round(data[0].loc[data[0].index[x], 'min'].sum(), 2))
             self.style_cell(self.document.tables[8].cell(1 + x, 5), '宋体', 177800)
