@@ -853,24 +853,26 @@ class Word:
         name_list = list(set(data.bs.asset['投组单元名称'].tolist()))
         for x in range(len(name_list)):
             name = name_list[x]
-            total = data.bs.asset['市值'].sum()
+            total = data.bs.asset.loc[data.bs.asset['投组单元名称'] == name, '市值'].sum()
             self.document.tables[20].add_row()
             self.document.tables[20].cell(5 + 3 * x, 0).text = name + "杠杆率"
             self.style_cell(self.document.tables[20].cell(5 + 3 * x, 0), '宋体', 177800)
-            self.document.tables[20].cell(5 + 3 * x, 1).text = total / data.bs.loan.loc[
-                (data.bs.loan['投组单元名称'] == name) & (data.bs.loan['产品分类'] == '理财产品'), '市值'].sum()
+            self.document.tables[20].cell(5 + 3 * x, 1).text = str(round(total / data.bs.loan.loc[
+                (data.bs.loan['投组单元名称'] == name) & (data.bs.loan['产品分类'] == '理财产品'), '市值'].sum(), 2))
             self.style_cell(self.document.tables[20].cell(5 + 3 * x, 1), '宋体', 177800)
             self.document.tables[20].add_row()
             self.document.tables[20].cell(6 + 3 * x, 0).text = name + "逆回购杠杆率"
             self.style_cell(self.document.tables[20].cell(6 + 3 * x, 0), '宋体', 177800)
-            self.document.tables[20].cell(6 + 3 * x, 1).text = data.bs.asset.loc[(data.bs.asset['投组单元名称'] == name) & (
-                    data.bs.asset['产品分类'] == '买入返售金融资产'), '市值'].sum() / total
+            self.document.tables[20].cell(6 + 3 * x, 1).text = str(
+                round(data.bs.asset.loc[(data.bs.asset['投组单元名称'] == name) & (
+                        data.bs.asset['产品分类'] == '买入返售金融资产'), '市值'].sum() / total, 2))
             self.style_cell(self.document.tables[20].cell(6 + 3 * x, 1), '宋体', 177800)
             self.document.tables[20].add_row()
             self.document.tables[20].cell(7 + 3 * x, 0).text = name + "正回购杠杆率"
             self.style_cell(self.document.tables[20].cell(7 + 3 * x, 0), '宋体', 177800)
-            self.document.tables[20].cell(7 + 3 * x, 1).text = data.bs.loan.loc[(data.bs.loan['投组单元名称'] == name) & (
-                    data.bs.loan['产品分类'] == '卖出回购金融资产款'), '市值'].sum() / total
+            self.document.tables[20].cell(7 + 3 * x, 1).text = str(
+                round(data.bs.loan.loc[(data.bs.loan['投组单元名称'] == name) & (
+                        data.bs.loan['产品分类'] == '卖出回购金融资产款'), '市值'].sum() / total, 2))
             self.style_cell(self.document.tables[20].cell(7 + 3 * x, 1), '宋体', 177800)
         self.delete_row(self.document.tables[20], len(self.document.tables[20]) - 1)
 
