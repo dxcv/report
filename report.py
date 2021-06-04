@@ -789,7 +789,7 @@ class Department:
 
     def lost(self):
         res = self.bs.bond.asset_bond()
-        res['成本'] = res['成本'] / res['最新面值'] * 100
+        res['成本'] = res['成本'] * res['最新面值'] / 100
         res['止损限额'] = (res['成本'] - res['估值净价']) / res['成本'] * 100
         return [res.loc[(res['剩余期限'] <= 5) & (res['止损限额'] > 16), :],
                 res.loc[(res['剩余期限'] > 5) & (res['剩余期限'] <= 10) & (res['止损限额'] > 23), :],
