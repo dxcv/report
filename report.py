@@ -891,12 +891,18 @@ class Word:
         return self.format_num(num * 100) + "%"
 
     def leverage_ty(self, data, info):
-        self.document.tables[20].cell(2, 1).text = self.format_num(
-            data.bs.loan.loc[data.bs.loan['产品分类'] == '回购', '市值'].sum() / info.get_net())
+        repo_in = data.bs.loan.loc[data.bs.loan['产品分类'] == '回购', '市值'].sum() / info.get_net()
+        self.document.tables[20].cell(2, 1).text = self.format_percent(repo_in)
         self.style_cell(self.document.tables[20].cell(2, 1), '宋体', 177800)
-        self.document.tables[20].cell(3, 1).text = self.format_num(
-            data.bs.asset.loc[data.bs.asset['产品分类'] == '回购', '市值'].sum() / info.get_net())
+        repo_out = data.bs.asset.loc[data.bs.asset['产品分类'] == '回购', '市值'].sum() / info.get_net()
+        self.document.tables[20].cell(3, 1).text = self.format_percent(repo_out)
         self.style_cell(self.document.tables[20].cell(3, 1), '宋体', 177800)
+        if repo_in > repo_out:
+            self.document.tables[1].cell(1, 4).text = "正回购" + self.format_percent(repo_in)
+            self.style_cell(self.document.tables[1].cell(1, 4), '宋体', 152400)
+        else:
+            self.document.tables[1].cell(1, 4).text = "逆回购" + self.format_percent(repo_out)
+            self.style_cell(self.document.tables[1].cell(1, 4), '宋体', 152400)
 
     def leverage_lc(self, data):
         name_list = list(set(data.bs.asset['投组单元名称'].tolist()))
@@ -906,7 +912,7 @@ class Word:
             self.document.tables[20].add_row()
             self.document.tables[20].cell(5 + 3 * x, 0).text = name + "杠杆率"
             self.style_cell(self.document.tables[20].cell(5 + 3 * x, 0), '宋体', 177800)
-            self.document.tables[20].cell(5 + 3 * x, 1).text = self.format_num(total / data.bs.loan.loc[
+            self.document.tables[20].cell(5 + 3 * x, 1).text = self.format_percent(total / data.bs.loan.loc[
                 (data.bs.loan['投组单元名称'] == name) & (data.bs.loan['产品分类'] == '理财产品'), '市值'].sum())
             self.style_cell(self.document.tables[20].cell(5 + 3 * x, 1), '宋体', 177800)
             self.document.tables[20].cell(5 + 3 * x, 2).text = "140%"
@@ -914,7 +920,7 @@ class Word:
             self.document.tables[20].add_row()
             self.document.tables[20].cell(6 + 3 * x, 0).text = name + "逆回购杠杆率"
             self.style_cell(self.document.tables[20].cell(6 + 3 * x, 0), '宋体', 177800)
-            self.document.tables[20].cell(6 + 3 * x, 1).text = self.format_num(
+            self.document.tables[20].cell(6 + 3 * x, 1).text = self.format_percent(
                 data.bs.asset.loc[(data.bs.asset['投组单元名称'] == name) & (
                         data.bs.asset['产品分类'] == '买入返售金融资产'), '市值'].sum() / total)
             self.style_cell(self.document.tables[20].cell(6 + 3 * x, 1), '宋体', 177800)
@@ -923,7 +929,7 @@ class Word:
             self.document.tables[20].add_row()
             self.document.tables[20].cell(7 + 3 * x, 0).text = name + "正回购杠杆率"
             self.style_cell(self.document.tables[20].cell(7 + 3 * x, 0), '宋体', 177800)
-            self.document.tables[20].cell(7 + 3 * x, 1).text = self.format_num(
+            self.document.tables[20].cell(7 + 3 * x, 1).text = self.format_percent(
                 data.bs.loan.loc[(data.bs.loan['投组单元名称'] == name) & (
                         data.bs.loan['产品分类'] == '卖出回购金融资产款'), '市值'].sum() / total)
             self.style_cell(self.document.tables[20].cell(7 + 3 * x, 1), '宋体', 177800)
@@ -936,6 +942,7 @@ class Word:
         self.concentration()
         self.area()
         self.duration()
+        self.leverage()
         self.ratio()
         self.lost()
         self.credit_limit()
@@ -1012,6 +1019,10 @@ class Word:
                 self.document.tables[14].cell(2 + x, y).text = big[x][y]
                 self.style_cell(self.document.tables[14].cell(2 + x, y), '宋体', 177800)
         data, big = self.lc.concentration()
+        self.document.tables[1].cell(2, 1).text = self.format_int(sum([int(x[0]) for x in data]))
+        self.style_cell(self.document.tables[1].cell(2, 1), '宋体', 152400)
+        self.document.tables[1].cell(2, 2).text = self.format_int(int(data[2][0]) + int(data[3][0]))
+        self.style_cell(self.document.tables[1].cell(2, 2), '宋体', 152400)
         self.document.tables[16].cell(6, 1).text = self.format_int(sum([int(x[0]) for x in data]))
         self.style_cell(self.document.tables[16].cell(6, 1), '宋体', 177800, True)
         self.document.tables[16].cell(6, 2).text = self.format_int(sum([int(x[1]) for x in data]))
@@ -1038,7 +1049,7 @@ class Word:
             self.document.tables[15].cell(2 + x, 2).text = self.format_percent(data.loc[x, '占比'])
             self.style_cell(self.document.tables[15].cell(2 + x, 2), '宋体', 177800)
         self.document.tables[15].cell(2 + len(data), 1).text = self.format_num(data['市值'].sum())
-        self.style_cell(self.document.tables[15].cell(2 + len(data), 2), '宋体', 177800, True)
+        self.style_cell(self.document.tables[15].cell(2 + len(data), 1), '宋体', 177800, True)
         data = self.lc.area()
         self.sharp_table(self.document.tables[18], 5 + len(data))
         for x in range(len(data)):
@@ -1049,7 +1060,7 @@ class Word:
             self.document.tables[18].cell(2 + x, 2).text = self.format_percent(data.loc[x, '占比'])
             self.style_cell(self.document.tables[18].cell(2 + x, 2), '宋体', 177800)
         self.document.tables[18].cell(2 + len(data), 1).text = self.format_num(data['市值'].sum())
-        self.style_cell(self.document.tables[18].cell(2 + len(data), 2), '宋体', 177800, True)
+        self.style_cell(self.document.tables[18].cell(2 + len(data), 1), '宋体', 177800, True)
 
     def duration(self):
         data = self.ty.duration()
@@ -1067,6 +1078,7 @@ class Word:
                 self.document.tables[19].cell(5 + x, 1 + y).text = self.format_num(data[x][y])
                 self.style_cell(self.document.tables[19].cell(5 + x, 1 + y), '宋体', 177800)
 
+    def leverage(self):
         self.leverage_ty(self.ty, self.bank)
         self.leverage_lc(self.lc)
 
@@ -1074,28 +1086,28 @@ class Word:
         data = self.ty.ratio(self.bank.get_asset())
         self.document.tables[1].cell(4, 1).text = data[1]
         self.style_cell(self.document.tables[1].cell(4, 1), '宋体', 152400)
-        self.document.tables[1].cell(4, 2).text = data[3]
-        self.style_cell(self.document.tables[1].cell(4, 2), '宋体', 152400)
-        self.document.tables[1].cell(4, 3).text = data[4]
+        self.document.tables[1].cell(4, 3).text = data[3]
         self.style_cell(self.document.tables[1].cell(4, 3), '宋体', 152400)
-        self.document.tables[1].cell(4, 4).text = data[5]
-        self.style_cell(self.document.tables[1].cell(4, 4), '宋体', 152400)
-        self.document.tables[1].cell(4, 5).text = data[6]
+        self.document.tables[1].cell(4, 5).text = data[4]
         self.style_cell(self.document.tables[1].cell(4, 5), '宋体', 152400)
+        self.document.tables[1].cell(4, 6).text = data[5]
+        self.style_cell(self.document.tables[1].cell(4, 6), '宋体', 152400)
+        self.document.tables[1].cell(4, 7).text = data[6]
+        self.style_cell(self.document.tables[1].cell(4, 7), '宋体', 152400)
         for x in range(8):
             self.document.tables[21].cell(1 + x, 1).text = str(data[x])
             self.style_cell(self.document.tables[21].cell(1 + x, 1), '宋体', 177800)
         data = self.lc.ratio(self.bank.get_asset())
         self.document.tables[1].cell(5, 1).text = data[1]
         self.style_cell(self.document.tables[1].cell(5, 1), '宋体', 152400)
-        self.document.tables[1].cell(5, 2).text = data[3]
-        self.style_cell(self.document.tables[1].cell(5, 2), '宋体', 152400)
-        self.document.tables[1].cell(5, 3).text = data[4]
+        self.document.tables[1].cell(5, 3).text = data[3]
         self.style_cell(self.document.tables[1].cell(5, 3), '宋体', 152400)
-        self.document.tables[1].cell(5, 4).text = data[5]
-        self.style_cell(self.document.tables[1].cell(5, 4), '宋体', 152400)
-        self.document.tables[1].cell(5, 5).text = data[6]
+        self.document.tables[1].cell(5, 5).text = data[4]
         self.style_cell(self.document.tables[1].cell(5, 5), '宋体', 152400)
+        self.document.tables[1].cell(5, 6).text = data[5]
+        self.style_cell(self.document.tables[1].cell(5, 6), '宋体', 152400)
+        self.document.tables[1].cell(5, 7).text = data[6]
+        self.style_cell(self.document.tables[1].cell(5, 7), '宋体', 152400)
         for x in range(8):
             self.document.tables[21].cell(1 + x, 2).text = str(data[x])
             self.style_cell(self.document.tables[21].cell(1 + x, 2), '宋体', 177800)
@@ -1172,13 +1184,13 @@ class Word:
     def credit_limit(self):
         data_ty = self.ty.credit_limit()
         data_lc = self.lc.credit_limit()
-        if data_ty[0] > 0.2:
-            if data_lc[0] > 0.2:
+        if data_ty[0] > 0.3:
+            if data_lc[0] > 0.3:
                 self.document.tables[25].cell(1, 1).text = str(data_ty[1]) + '\n' + str(data_lc[1])
             else:
                 self.document.tables[25].cell(1, 1).text = str(data_ty[1])
         else:
-            if data_lc[0] > 0.2:
+            if data_lc[0] > 0.3:
                 self.document.tables[25].cell(1, 1).text = str(data_lc[1])
             else:
                 if data_ty[0] > data_lc[0]:
@@ -1205,7 +1217,7 @@ class Word:
         self.document.tables[26].cell(6, 2).text = self.format_num(res[4])
         self.style_cell(self.document.tables[26].cell(6, 2), '宋体', 177800)
         self.document.tables[26].cell(7, 2).text = self.format_percent(res[3] / res[4])
-        self.style_cell(self.document.tables[26].cell(7, 2), '宋体', 177800)
+        self.style_cell(self.document.tables[26].cell(7, 2), '宋体', 177800, True)
 
     def etf(self):
         data = ETF(self.lc).get()
