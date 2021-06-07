@@ -663,42 +663,21 @@ class Party:
         tmp['部门'] = '理财'
         tmp = tmp[['对手方', '方向', '部门', '金额']].copy(deep=True)
         self.data = self.data.append(tmp)
-        self.flag = False
-
-    def wind(self):
-        if not self.flag:
-            partner = list(set(self.data['对手方'].tolist()))
-            db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
-            cur = db.cursor()
-            code = pd.read_sql("select name,code from partner_code where name in ('" + "','".join(partner) + "')", db)
-            for x in partner:
-                if x not in code['name'].tolist():
-                    new_code = input("请补充" + x + "对应的代码：")
-                    code.loc[x, 'code'] = new_code
-                    cur.execute("insert into partner_code values('" + x + "','" + new_code + "')")
-            db.commit()
-            bad = pd.merge(code[code['code'] == 'BAD'], self.data, how='left', left_on='name', right_on='对手方')
-            bad = bad[['对手方', '方向', '部门', '金额']]
-            code = code[(code['code'] != 'BAD') & (code['code'] != 'GOOD')]
-            if not w.isconnected():
-                w.start()
-            tmp = w.wss(",".join(list(set(code['code'].tolist()))), "regcapital,latestissurercreditrating",
-                        "tradeDate=" + self.fix_date + ";industryType=3;unit=1", usedf=True)[1]
-            tmp = tmp[(tmp['REGCAPITAL'] < 100000000000) & (tmp['LATESTISSURERCREDITRATING'] != 'AAA')]
-            if len(tmp) > 0:
-                self.data = pd.merge(code, self.data, how='left', left_on='name', right_on='对手方')
-                self.data = pd.merge(tmp, self.data, how='left', left_on='code', right_index=True)
-                self.data = self.data[['对手方', '方向', '部门', '金额']]
-                self.data = self.data.append(bad)
-            elif len(bad) > 0:
-                self.data = bad
-            else:
-                self.data = pd.DataFrame()
 
     def get(self):
-        if not self.flag:
-            self.wind()
         out = None
+        partner = list(set(self.data['对手方'].tolist()))
+        db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='pac', charset='utf8')
+        cur = db.cursor()
+        code = pd.read_sql("select name from partner_code where name in ('" + "','".join(partner) + "')", db)
+        for x in partner:
+            if x not in code['name'].tolist():
+                new = input("请输入" + x + "对应的代码、注册资本(亿元)和主体评级:").replace("，", ",").split(",")
+                cur.execute("insert into partner_code values('" + "','".join(new) + "')")
+                code = code.append([x] + new)
+        db.commit()
+        code = code[(code['REGCAPITAL'] < 100) & (code['LATESTISSURERCREDITRATING'] != 'AAA')]
+        self.data = pd.merge(code, self.data, how='left', left_on='name', right_on='对手方')
         if len(self.data) > 0:
             out = self.data.groupby(['对手方', '方向', '部门'])['金额'].agg(['sum', 'count', 'max', 'min'])
         return out
