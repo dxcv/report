@@ -1173,7 +1173,7 @@ class Word:
                 for y in x.index.tolist():
                     self.document.tables[24].cell(i, 0).text = x.loc[y, '名称']
                     self.style_cell(self.document.tables[24].cell(i, 0), '宋体', 177800)
-                    self.document.tables[24].cell(i, 1).text = '同业业务中心'
+                    self.document.tables[24].cell(i, 1).text = '理财事业部'
                     self.style_cell(self.document.tables[24].cell(i, 1), '宋体', 177800)
                     self.document.tables[24].cell(i, 2).text = self.format_percent(x.loc[y, '止损限额'])
                     self.style_cell(self.document.tables[24].cell(i, 2), '宋体', 177800)
