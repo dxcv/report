@@ -384,7 +384,7 @@ class Function:
                 tmp['名称'] = tmp['Unnamed: 14']
                 tmp['类别'] = '债券'
                 tmp['交易日'] = tmp['Unnamed: 11']
-                tmp['方向'] = tmp['Unnamed: 3']
+                tmp['方向'] = tmp['Unnamed: 3'].replace({'现券买入': '买入', '现券卖出': '卖出'})
                 tmp['金额'] = tmp['Unnamed: 20'] / 100000000
                 tmp['交易投组'] = tmp['Unnamed: 4']
                 tmp['对手方'] = tmp['对手名称']
@@ -394,10 +394,12 @@ class Function:
                 db = pymysql.connect(host='localhost', port=3306, user='root', password='root', db='cost',
                                      charset='utf8')
                 cost = pd.read_sql("select part,name,cost,amount from licai", db)
+                if cost.empty:
+                    cost = pd.DataFrame(columns=['part', 'name', 'cost', 'amount'])
                 cost['match'] = cost['part'] + cost['name']
                 tmp['match'] = tmp['交易投组'] + tmp['名称']
                 for x in range(len(tmp)):
-                    if tmp.loc[x, '方向'] == '现券买入':
+                    if tmp.loc[x, '方向'] == '买入':
                         cost_match = cost.loc[cost['match'] == tmp.loc[x, 'match'], ['cost', 'amount']]
                         cost_match = cost_match.reset_index(drop=True)
                         if len(cost_match) > 0:
@@ -410,8 +412,11 @@ class Function:
                                                                                      (tmp.loc[x, 'Unnamed: 15'] / 100 +
                                                                                       cost_match.loc[0, 'amount'])
                         else:
-                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'] = tmp.loc[x, 'Unnamed: 15'] / 100
-                            cost.loc[cost['match'] == tmp.loc[x, 'match'], 'cost'] = tmp.loc[x, '净价']
+                            cost = cost.append({'part': tmp.loc[x, '交易投组'],
+                                                'name': tmp.loc[x, '名称'],
+                                                'cost': tmp.loc[x, '净价'],
+                                                'amount': tmp.loc[x, 'Unnamed: 15'] / 100,
+                                                'match': tmp.loc[x, '交易投组'] + tmp.loc[x, '名称']}, ignore_index=True)
                     else:
                         res = cost.loc[cost['match'] == tmp.loc[x, 'match'], 'amount'].sum() - tmp.loc[
                             x, 'Unnamed: 15'].sum() / 100
